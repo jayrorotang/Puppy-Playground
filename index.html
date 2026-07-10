@@ -918,6 +918,12 @@
     }
     window.switchScene = switchScene;
 
+    // 预加载所有光标图，切换场景时瞬间生效（避免解码延迟）
+    ['cursor1.png', 'ball.png', 'Hand with fingers splayed.png'].forEach(src => {
+      const img = new Image();
+      img.src = src;
+    });
+
     // 灯泡开关：点亮后显示睡觉视频并启用「鼠标上下 scrub」（上=正放，下=倒放），苍蝇指针；再点熄灭回到黑屏
     (function () {
       const lamp = document.getElementById('lamp');

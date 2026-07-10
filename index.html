@@ -1,0 +1,1044 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+<title>跟随鼠标的小狗</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body {
+    width: 100%;
+    height: 100%;
+    overflow: hidden;
+    background: #000;
+    cursor: none;
+  }
+  #stage {
+    position: fixed;
+    inset: 0;
+    width: 100vw;
+    height: 100vh;
+    height: 100dvh;   /* 移动端跟随浏览器工具栏，避免露黑边 */
+  }
+  #dog {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    object-fit: cover;   /* 铺满整个页面 */
+    object-position: center;
+  }
+  #hint {
+    display: none;
+    position: fixed;
+    left: 50%;
+    bottom: 32px;
+    transform: translateX(-50%);
+    color: rgba(255,255,255,0.85);
+    font-family: -apple-system, "PingFang SC", system-ui, sans-serif;
+    font-size: 14px;
+    letter-spacing: 0.5px;
+    padding: 8px 18px;
+    background: rgba(0,0,0,0.35);
+    border-radius: 999px;
+    backdrop-filter: blur(6px);
+    pointer-events: none;
+    user-select: none;
+    transition: opacity 0.6s ease;
+    z-index: 10;
+  }
+  #hint.hide { opacity: 0; }
+  #coming-soon {
+    display: none;
+    position: fixed;
+    inset: 0;
+    z-index: 5;
+    background: #000;
+    color: rgba(255,255,255,0.9);
+    align-items: center;
+    justify-content: center;
+    font-family: -apple-system, "PingFang SC", system-ui, sans-serif;
+    font-size: clamp(34px, 8vw, 60px);
+    font-weight: 500;
+    letter-spacing: 1px;
+    transition: background 0.4s ease, color 0.4s ease;
+  }
+  #coming-soon.show { display: flex; cursor: default; }
+  /* 灯亮进入视频 scrub 模式时隐藏系统指针（改用苍蝇） */
+  #coming-soon.show.playing { cursor: none; }
+  #sleep-video {
+    position: fixed;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    opacity: 0;
+    filter: brightness(0.15);
+    pointer-events: none;
+    transition: opacity 0.9s ease, filter 1.1s ease;
+    z-index: 1;
+  }
+  /* 灯亮：视频缓缓浮现并由暗转亮，模拟开灯 */
+  #coming-soon.playing #sleep-video { opacity: 1; filter: brightness(1); }
+  .breathe {
+    display: inline-block;
+    animation: breathe 3.4s ease-in-out infinite;
+    transform-origin: center;
+    transition: opacity 0.7s ease;
+  }
+  #coming-soon.playing .breathe { animation: none; opacity: 0; }
+  @keyframes breathe {
+    0%   { transform: scale(1);    opacity: 0.55; }
+    45%  { transform: scale(1.14); opacity: 1; }
+    70%  { transform: scale(1.14); opacity: 1; }
+    100% { transform: scale(1);    opacity: 0.55; }
+  }
+  #coming-soon.lit { background: #fff; color: rgba(0,0,0,0.85); }
+  /* 右上角灯泡开关 */
+  #lamp {
+    position: fixed;
+    top: clamp(24px, 7vh, 80px);
+    right: clamp(20px, 7vw, 100px);
+    z-index: 6;
+    display: none;
+    flex-direction: column;
+    align-items: center;
+    cursor: pointer;
+    user-select: none;
+  }
+  #lamp.show { display: flex; }
+  #lamp .bulb {
+    width: clamp(76px, 12vw, 120px);
+    height: clamp(76px, 12vw, 120px);
+    border-radius: 50%;
+    background: radial-gradient(circle at 50% 45%, #2a2a2a, #141414 70%);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    box-shadow: 0 0 0 12px rgba(255,255,255,0.02);
+    transition: background 0.4s ease, box-shadow 0.4s ease;
+  }
+  #lamp.on .bulb {
+    background: radial-gradient(circle at 50% 40%, #fff7d6, #ffe38a 60%, #f4c948 100%);
+    box-shadow: 0 0 40px 10px rgba(255,220,120,0.6), 0 0 0 12px rgba(255,235,150,0.15);
+  }
+  #lamp .bulb svg { width: clamp(38px, 5.6vw, 56px); height: clamp(38px, 5.6vw, 56px); }
+  #lamp .bulb svg path { fill: #6a6a6a; transition: fill 0.4s ease; }
+  #lamp.on .bulb svg path { fill: #a6791f; }
+  #lamp .cord-wrap {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    transform-origin: top center;
+  }
+  #lamp.pull .cord-wrap { animation: cordPull 0.55s ease-out; }
+  @keyframes cordPull {
+    0%   { transform: scaleY(1); }
+    35%  { transform: scaleY(1.4); }
+    60%  { transform: scaleY(0.82); }
+    80%  { transform: scaleY(1.1); }
+    100% { transform: scaleY(1); }
+  }
+  #lamp .cord { width: 2px; height: clamp(40px, 7vh, 70px); background: rgba(160,160,160,0.5); }
+  #lamp .knob {
+    width: 16px; height: 16px; border-radius: 50%;
+    background: rgba(160,160,160,0.7);
+    margin-top: -1px;
+  }
+
+  /* ===== 左侧半圆弧形轨道菜单 ===== */
+  #arc {
+    position: fixed;
+    left: 0; top: 0;
+    width: clamp(240px, 42vw, 560px);
+    height: 100vh;
+    z-index: 15;
+    font-family: -apple-system, "PingFang SC", system-ui, sans-serif;
+    user-select: none;
+    pointer-events: none;   /* 容器不拦截，只有按钮才响应 */
+  }
+  #arc-line {
+    position: absolute;
+    top: 50%;
+    left: -1650px;
+    width: 1800px;
+    height: 1800px;
+    margin-top: -900px;
+    border-radius: 50%;
+    border: 1.5px solid rgba(255,255,255,0.28);
+    box-shadow: inset 0 0 40px rgba(0,0,0,0.05);
+    pointer-events: none;
+  }
+  .arc-item {
+    position: absolute;
+    left: 0; top: 0;
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    transform-origin: center;
+    transition: opacity 0.35s ease, filter 0.35s ease, transform 0.2s ease;
+    will-change: transform, opacity;
+    cursor: pointer;
+    pointer-events: auto;   /* 仅按钮区域响应指针 */
+  }
+  /* hover 效果 */
+  .arc-item:hover .icon {
+    background: rgba(255,255,255,0.32);
+    border-color: rgba(180,120,255,0.6);
+    transform: scale(1.12);
+    box-shadow: 0 6px 18px rgba(150,90,255,0.25);
+  }
+  .arc-item:hover .label {
+    color: rgba(255,255,255,0.9);
+  }
+  .arc-item .label {
+    order: 1;
+    font-size: clamp(15px, 1.6vw, 20px);
+    font-weight: 600;
+    color: rgba(255,255,255,0.55);
+    white-space: nowrap;
+    text-align: right;
+    transition: color 0.3s ease;
+    text-shadow: 0 1px 4px rgba(0,0,0,0.4);
+  }
+  .arc-item .icon {
+    order: 2;
+    width: clamp(48px, 5vw, 64px);
+    height: clamp(48px, 5vw, 64px);
+    display: grid;
+    place-items: center;
+    font-size: clamp(24px, 2.4vw, 30px);
+    background: rgba(255,255,255,0.14);
+    border: 1.5px solid transparent;
+    border-radius: clamp(14px, 1.6vw, 20px);
+    backdrop-filter: blur(8px);
+    transition: all 0.3s ease;
+  }
+  .arc-item.active .icon {
+    background: rgba(255,255,255,0.9);
+    border-color: rgba(180,120,255,0.9);
+    box-shadow: 0 8px 24px rgba(150,90,255,0.35),
+                0 0 0 4px rgba(180,120,255,0.18);
+    transform: scale(1.08);
+  }
+  /* 滚动居中（未点击选中）：中等聚焦，强于普通项但明显弱于选中 */
+  .arc-item.focused:not(.active) .icon {
+    background: rgba(255,255,255,0.42);
+    border-color: rgba(255,255,255,0.35);
+    box-shadow: 0 4px 14px rgba(0,0,0,0.2);
+    transform: scale(1.03);
+  }
+  .arc-item.focused:not(.active) .label {
+    color: rgba(255,255,255,0.95);
+    font-weight: 700;
+  }
+  .arc-item.active .label {
+    color: #1a1a1a;
+    font-weight: 700;
+    background: rgba(255,255,255,0.92);
+    padding: 8px 18px;
+    border-radius: 999px;
+    box-shadow: 0 6px 18px rgba(0,0,0,0.25);
+    text-shadow: none;
+  }
+  #arc-handle {
+    position: absolute;
+    left: 0; top: 0;
+    width: 56px;
+    height: 20px;
+    margin: -10px 0 0 -28px;
+    background: #2b2b2f;
+    border-radius: 999px;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.35);
+    transition: transform 0.35s cubic-bezier(.22,.61,.36,1);
+    pointer-events: none;
+  }
+
+  /* 跟随鼠标的骨头指针（不受浏览器 cursor 尺寸限制） */
+  #bone {
+    position: fixed;
+    left: 0; top: 0;
+    width: 120px;
+    height: 120px;
+    margin-left: -60px;
+    margin-top: -60px;
+    object-fit: contain;
+    pointer-events: none;
+    z-index: 20;
+    transform: translate(-200px, -200px);
+    will-change: transform;
+    filter: drop-shadow(0 3px 6px rgba(0,0,0,0.4));
+  }
+  /* 跟随鼠标的苍蝇指针（睡觉页 scrub 用） */
+  #fly {
+    position: fixed;
+    left: 0; top: 0;
+    font-size: 52px;
+    line-height: 1;
+    margin-left: -26px;
+    margin-top: -26px;
+    pointer-events: none;
+    z-index: 21;
+    display: none;
+    transform: translate(-200px, -200px);
+    will-change: transform;
+    user-select: none;
+  }
+  #fly.show { display: block; }
+  /* 黑屏睡觉页：跟随鼠标的蜡烛光晕 */
+  #glow {
+    position: fixed;
+    left: 0; top: 0;
+    width: 320px;
+    height: 320px;
+    margin-left: -160px;
+    margin-top: -160px;
+    pointer-events: none;
+    z-index: 6;
+    display: none;
+    opacity: 0;
+    transition: opacity 0.6s ease;
+    will-change: transform;
+  }
+  #glow.show { display: block; opacity: 1; }
+  #glow .halo {
+    width: 100%;
+    height: 100%;
+    border-radius: 50%;
+    background: radial-gradient(circle at center,
+      rgba(255,214,140,0.30) 0%,
+      rgba(255,190,110,0.17) 32%,
+      rgba(255,170,90,0.06) 55%,
+      rgba(0,0,0,0) 72%);
+    mix-blend-mode: screen;
+    filter: blur(2px);
+    animation: flicker 3.2s ease-in-out infinite;
+    transform-origin: center;
+  }
+  @keyframes flicker {
+    0%, 100% { opacity: 1;    transform: scale(1); }
+    25%      { opacity: 0.86; transform: scale(0.97); }
+    50%      { opacity: 1;    transform: scale(1.03); }
+    75%      { opacity: 0.9;  transform: scale(0.99); }
+  }
+</style>
+</head>
+<body>
+  <div id="stage">
+    <video id="dog" muted playsinline preload="auto"></video>
+  </div>
+  <div id="coming-soon"><span class="breathe">Z z Z z</span><video id="sleep-video" muted playsinline preload="auto"></video></div>
+  <div id="lamp" title="灯光开关">
+    <div class="bulb">
+      <svg viewBox="0 0 24 24"><path d="M9 21c0 .55.45 1 1 1h4c.55 0 1-.45 1-1v-1H9v1zm3-19C8.14 2 5 5.14 5 9c0 2.38 1.19 4.47 3 5.74V17c0 .55.45 1 1 1h6c.55 0 1-.45 1-1v-2.26c1.81-1.27 3-3.36 3-5.74 0-3.86-3.14-7-7-7z"/></svg>
+    </div>
+    <div class="cord-wrap">
+      <div class="cord"></div>
+      <div class="knob"></div>
+    </div>
+  </div>
+  <div id="hint">← 左右移动鼠标，让小狗转头 →</div>
+
+  <img id="bone" src="cursor1.png" alt="biscuit cursor" />
+  <div id="fly">🪰</div>
+  <div id="glow"><div class="halo"></div></div>
+
+  <!-- 左侧弧形轨道菜单 -->
+  <div id="arc">
+    <div id="arc-line"></div>
+  </div>
+
+  <script>
+    // ===== 按钮交互音效（Web Audio 合成，无需外部文件） =====
+    window.uiSound = (function () {
+      let ctx = null;
+      function ac() {
+        if (!ctx) {
+          const AC = window.AudioContext || window.webkitAudioContext;
+          if (!AC) return null;
+          ctx = new AC();
+        }
+        if (ctx.state === 'suspended') ctx.resume();
+        return ctx;
+      }
+      function tone(freq, dur, type, gain, freqEnd) {
+        const c = ac();
+        if (!c) return;
+        const o = c.createOscillator();
+        const g = c.createGain();
+        o.type = type || 'sine';
+        o.frequency.setValueAtTime(freq, c.currentTime);
+        if (freqEnd) o.frequency.exponentialRampToValueAtTime(freqEnd, c.currentTime + dur);
+        g.gain.setValueAtTime(0.0001, c.currentTime);
+        g.gain.linearRampToValueAtTime(gain || 0.15, c.currentTime + 0.005);
+        g.gain.exponentialRampToValueAtTime(0.0001, c.currentTime + dur);
+        o.connect(g).connect(c.destination);
+        o.start();
+        o.stop(c.currentTime + dur + 0.02);
+      }
+      return {
+        click()  { tone(320, 0.09, 'triangle', 0.18, 640); },  // 菜单点击：短促上扬
+        hover()  { tone(880, 0.035, 'sine', 0.045); },         // 悬停：极轻 tick
+        scroll() { tone(560, 0.05, 'triangle', 0.08, 720); },  // 滚动切项：清脆 tick
+        toggle() { tone(200, 0.13, 'square', 0.13, 90); }      // 灯开关：低沉咔哒
+      };
+    })();
+
+    // ===== 各页面背景音乐（Web Audio 程序化合成的循环片段） =====
+    window.bgm = (function () {
+      const NF = m => 440 * Math.pow(2, (m - 69) / 12);
+      // 每个场景：bpm 速度、sub 每拍步数、音色、音量、低通截止、旋律与低音音符（0=休止）
+      const scenes = {
+        // 温暖慵懒的大调琶音
+        feeding: {
+          bpm: 88, sub: 2, lead: 'triangle', bass: 'sine', lg: 0.05, bg: 0.055, cutoff: 2600,
+          mel: [72, 0, 76, 0, 79, 0, 76, 0, 74, 0, 77, 0, 76, 0, 0, 0],
+          bs:  [48, 0, 0, 0, 55, 0, 0, 0, 53, 0, 0, 0, 55, 0, 0, 0]
+        },
+        // 俏皮明亮、跳跃
+        highfive: {
+          bpm: 120, sub: 2, lead: 'square', bass: 'triangle', lg: 0.032, bg: 0.05, cutoff: 3200,
+          mel: [79, 0, 79, 81, 83, 0, 81, 79, 78, 0, 79, 81, 79, 0, 0, 0],
+          bs:  [43, 0, 43, 0, 48, 0, 48, 0, 45, 0, 45, 0, 47, 0, 47, 0]
+        },
+        // 轻快活泼的五声音阶跳跃，圆润三角波
+        running: {
+          bpm: 132, sub: 2, lead: 'triangle', bass: 'triangle', lg: 0.05, bg: 0.05, cutoff: 3000,
+          mel: [81, 0, 84, 0, 86, 84, 81, 0, 79, 0, 81, 84, 86, 0, 84, 0],
+          bs:  [45, 0, 52, 0, 50, 0, 57, 0, 43, 0, 50, 0, 48, 0, 55, 0]
+        },
+        // 缓慢梦幻的摇篮曲
+        sleeping: {
+          bpm: 60, sub: 1, lead: 'sine', bass: 'sine', lg: 0.045, bg: 0.05, cutoff: 1300,
+          mel: [74, 0, 0, 0, 78, 0, 0, 0, 81, 0, 78, 0, 74, 0, 0, 0],
+          bs:  [38, 0, 0, 0, 45, 0, 0, 0, 43, 0, 0, 0, 45, 0, 0, 0]
+        }
+      };
+      let ctx = null, master = null;
+      let curKey = null, timer = null, step = 0, nextTime = 0, playing = false;
+      function ac() {
+        if (!ctx) {
+          const AC = window.AudioContext || window.webkitAudioContext;
+          if (!AC) return null;
+          ctx = new AC();
+          master = ctx.createGain();
+          master.gain.value = 0.0001;
+          master.connect(ctx.destination);
+        }
+        if (ctx.state === 'suspended') ctx.resume();
+        return ctx;
+      }
+      function voice(freq, t, dur, wave, gain, cutoff) {
+        const o = ctx.createOscillator(), g = ctx.createGain(), f = ctx.createBiquadFilter();
+        o.type = wave; o.frequency.value = freq;
+        f.type = 'lowpass'; f.frequency.value = cutoff;
+        g.gain.setValueAtTime(0.0001, t);
+        g.gain.linearRampToValueAtTime(gain, t + 0.02);
+        g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+        o.connect(f).connect(g).connect(master);
+        o.start(t); o.stop(t + dur + 0.05);
+      }
+      function schedule() {
+        const c = ac(); if (!c || !playing) return;
+        const sc = scenes[curKey]; if (!sc) return;
+        const spb = 60 / sc.bpm / sc.sub;   // 每步秒数
+        while (nextTime < c.currentTime + 0.25) {
+          const i = step % sc.mel.length;
+          if (sc.mel[i]) voice(NF(sc.mel[i]), nextTime, spb * 1.6, sc.lead, sc.lg, sc.cutoff);
+          if (sc.bs[i])  voice(NF(sc.bs[i]),  nextTime, spb * 1.9, sc.bass, sc.bg, sc.cutoff * 0.7);
+          nextTime += spb; step++;
+        }
+        timer = setTimeout(schedule, 60);
+      }
+      function play(key) {
+        if (!scenes[key]) { stop(); return; }
+        const c = ac(); if (!c) return;
+        if (curKey === key && playing) return;
+        curKey = key; playing = true;
+        if (timer) { clearTimeout(timer); timer = null; }
+        step = 0; nextTime = c.currentTime + 0.06;
+        master.gain.cancelScheduledValues(c.currentTime);
+        master.gain.setValueAtTime(Math.max(master.gain.value, 0.0001), c.currentTime);
+        master.gain.linearRampToValueAtTime(0.85, c.currentTime + 0.6);   // 淡入
+        schedule();
+      }
+      function stop() {
+        playing = false;
+        if (timer) { clearTimeout(timer); timer = null; }
+        if (ctx && master) {
+          master.gain.cancelScheduledValues(ctx.currentTime);
+          master.gain.setValueAtTime(Math.max(master.gain.value, 0.0001), ctx.currentTime);
+          master.gain.linearRampToValueAtTime(0.0001, ctx.currentTime + 0.4);
+        }
+        curKey = null;
+      }
+      return { play: play, stop: stop };
+    })();
+
+    // ===== 环境音效：呼吸声（黑屏）/ 苍蝇嗡嗡（视频页） =====
+    window.ambient = (function () {
+      let ctx = null, master = null;
+      function ac() {
+        if (!ctx) {
+          const AC = window.AudioContext || window.webkitAudioContext;
+          if (!AC) return null;
+          ctx = new AC();
+          master = ctx.createGain();
+          master.gain.value = 0.9;
+          master.connect(ctx.destination);
+        }
+        if (ctx.state === 'suspended') ctx.resume();
+        return ctx;
+      }
+      function noiseBuffer(c) {
+        const len = c.sampleRate * 2;
+        const buf = c.createBuffer(1, len, c.sampleRate);
+        const d = buf.getChannelData(0);
+        for (let i = 0; i < len; i++) d[i] = Math.random() * 2 - 1;
+        return buf;
+      }
+
+      // ---- 呼吸声：带通噪声 + 正弦 LFO 起伏 ----
+      let breath = null;
+      function breathe(on) {
+        const c = ac(); if (!c) return;
+        if (on) {
+          if (breath) return;
+          const src = c.createBufferSource();
+          src.buffer = noiseBuffer(c); src.loop = true;
+          const bp = c.createBiquadFilter();
+          bp.type = 'bandpass'; bp.frequency.value = 340; bp.Q.value = 0.5;   // 更低更柔的频段
+          const lp = c.createBiquadFilter();
+          lp.type = 'lowpass'; lp.frequency.value = 900;   // 削掉刺耳高频，气声更软
+          const g = c.createGain(); g.gain.value = 0.0001;
+          // LFO 调制音量，形成吸气/呼气起伏（周期约 6.7s，更缓更轻）
+          const lfo = c.createOscillator(); lfo.frequency.value = 0.15;
+          const depth = c.createGain(); depth.gain.value = 0.03;
+          const base = c.createConstantSource(); base.offset.value = 0.031;
+          lfo.connect(depth).connect(g.gain);
+          base.connect(g.gain);
+          // 呼气时略微提高滤波频率，模拟气流（幅度减小）
+          const fdepth = c.createGain(); fdepth.gain.value = 90;
+          lfo.connect(fdepth).connect(bp.frequency);
+          src.connect(bp).connect(lp).connect(g).connect(master);
+          src.start(); lfo.start(); base.start();
+          breath = { src, lfo, base, g };
+          master.gain.setTargetAtTime(0.9, c.currentTime, 0.2);
+        } else if (breath) {
+          const b = breath; breath = null;
+          try { b.g.gain.setTargetAtTime(0.0001, c.currentTime, 0.15); } catch (e) {}
+          setTimeout(() => {
+            try { b.src.stop(); b.lfo.stop(); b.base.stop(); } catch (e) {}
+          }, 500);
+        }
+      }
+
+      // ---- 苍蝇嗡嗡：锯齿波 + 颤音 + 抖动漫游 ----
+      let fly = null;
+      function flyBuzz(on) {
+        const c = ac(); if (!c) return;
+        if (on) {
+          if (fly) return;
+          const o = c.createOscillator(); o.type = 'sawtooth'; o.frequency.value = 190;
+          const lp = c.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 1400;
+          const trem = c.createGain(); trem.gain.value = 0.03;
+          // 颤音（音高抖动）
+          const vib = c.createOscillator(); vib.frequency.value = 6.5;
+          const vibD = c.createGain(); vibD.gain.value = 14;
+          vib.connect(vibD).connect(o.frequency);
+          // 快速震颤（嗡嗡的粗糙感）
+          const rough = c.createOscillator(); rough.frequency.value = 27;
+          const roughD = c.createGain(); roughD.gain.value = 0.012;
+          rough.connect(roughD).connect(trem.gain);
+          const out = c.createGain(); out.gain.value = 0.0001;
+          o.connect(lp).connect(trem).connect(out).connect(master);
+          out.gain.setTargetAtTime(1, c.currentTime, 0.15);   // 淡入
+          o.start(); vib.start(); rough.start();
+          // 随机漫游：不时改变基频，像到处乱飞
+          const wander = setInterval(() => {
+            if (!fly) return;
+            const f = 150 + Math.random() * 110;
+            o.frequency.setTargetAtTime(f, c.currentTime, 0.25);
+          }, 700);
+          fly = { o, vib, rough, wander, out };
+          master.gain.setTargetAtTime(0.9, c.currentTime, 0.2);
+        } else if (fly) {
+          const f = fly; fly = null;
+          clearInterval(f.wander);
+          try { f.out.gain.setTargetAtTime(0.0001, c.currentTime, 0.12); } catch (e) {}
+          setTimeout(() => { try { f.o.stop(); f.vib.stop(); f.rough.stop(); } catch (e) {} }, 400);
+        }
+      }
+
+      return { breathe, flyBuzz };
+    })();
+
+    // 首次用户交互时启动当前场景的 BGM（浏览器要求手势后才能出声）
+    window.currentMusic = 'feeding';
+    (function () {
+      function startOnce() {
+        if (window.bgm) window.bgm.play(window.currentMusic || 'feeding');
+        window.removeEventListener('pointerdown', startOnce);
+        window.removeEventListener('mousemove', startOnce);
+        window.removeEventListener('keydown', startOnce);
+      }
+      window.addEventListener('pointerdown', startOnce);
+      window.addEventListener('mousemove', startOnce);
+      window.addEventListener('keydown', startOnce);
+    })();
+
+    // ===== 左侧弧形轨道菜单 =====
+    (function buildArc() {
+      const arc = document.getElementById('arc');
+      const items = [
+        { name: 'High-five', icon: '🖐️', video: 'dog4.mp4',  cursor: 'Hand with fingers splayed.png', cursorSize: 120, scrub: 'y', music: 'highfive', hint: '↑ 上下移动鼠标：上=正放，下=倒放 ↓' },
+        { name: 'Feeding',       icon: '🍖', video: 'dog.mp4',  cursor: 'cursor1.png', cursorSize: 120, music: 'feeding', hint: '← 左右移动鼠标，让小狗转头 →' },
+        { name: 'Running',       icon: '⚽', video: 'dog3.mp4', cursor: 'ball.png',    cursorSize: 126, rate: 0.8, music: 'running', hint: '← 左右移动鼠标，让小狗奔跑 →' },
+        { name: 'Sleeping',      icon: '😴', video: 'dog.mp4',  cursor: 'cursor1.png', cursorSize: 120, comingSoon: true, music: 'sleeping', hint: '← 左右移动鼠标，让小狗动起来 →' },
+      ];
+
+      const R = 900;
+      const CX = -630;       // 弧线圆心 x（已整体左移100）
+      const GAP = 55;        // 图标位于弧线右侧的间距
+      const STEP = 9;
+      let current = 1;    // 滚动居中项
+      let selected = 1;   // 点击选中项
+
+      const els = items.map((it) => {
+        const el = document.createElement('div');
+        el.className = 'arc-item';
+        el.innerHTML =
+          '<div class="label">' + it.name + '</div>' +
+          '<div class="icon">' + it.icon + '</div>';
+        el.addEventListener('click', () => {
+          if (window.uiSound) window.uiSound.click();
+          current = els.indexOf(el);
+          selected = current;   // 点击才更新选中态
+          layout();
+          if (window.switchScene) window.switchScene(it);
+        });
+        el.addEventListener('pointerenter', () => { if (window.uiSound) window.uiSound.hover(); const b = document.getElementById('bone'); if (b) b.style.opacity = '0'; });
+        el.addEventListener('pointerleave', () => { const b = document.getElementById('bone'); if (b && !window.sceneBlank) b.style.opacity = '1'; });
+        arc.appendChild(el);
+        return el;
+      });
+
+      function layout() {
+        const h = window.innerHeight;
+        const w = window.innerWidth;
+        const cy = h / 2;
+        // 随视口高度自适应：垂直等距 + 轻微抛物线弯曲，任何窗口都不会破
+        const SP = Math.max(60, Math.min(140, h / 6));   // 相邻项垂直间距（随高度）
+        const CURVE = SP * 0.28;                          // 离中心越远越向左（弧感）
+        // 选中项图标右缘 x：随宽度收缩，窄屏不越界、宽屏不过分外扩
+        const baseX = Math.max(150, Math.min(300, w * 0.34));
+        els.forEach((el, i) => {
+          const offset = i - current;
+          const x = baseX - CURVE * offset * offset;
+          const y = cy + offset * SP;
+          el.style.transform =
+            'translate(' + x + 'px,' + y + 'px) translate(-100%, -50%)';
+          const dist = Math.abs(offset);
+          el.style.opacity = Math.max(0, 1 - dist * 0.22);
+          el.style.filter = 'blur(' + Math.min(2.5, dist * 0.5) + 'px)';
+          el.style.zIndex = String(100 - dist);
+          el.classList.toggle('focused', i === current);   // 滚动居中：轻聚焦
+          el.classList.toggle('active', i === selected);   // 点击选中：完整高亮
+        });
+      }
+
+      layout();
+      window.addEventListener('resize', layout);
+
+      window.addEventListener('wheel', (e) => {
+        if (e.deltaY > 0 && current < items.length - 1) current++;
+        else if (e.deltaY < 0 && current > 0) current--;
+        else return;
+        if (window.uiSound) window.uiSound.scroll();
+        layout();
+      }, { passive: true });
+    })();
+  </script>
+
+  <script>
+    const video = document.getElementById('dog');
+    const hint = document.getElementById('hint');
+    const bone = document.getElementById('bone');
+
+    // 灵敏度：整屏移动可推进 duration 的 0.8 倍
+    const SENSITIVITY = 1.0;
+
+    let prevX = null;
+    let prevY = null;
+    let scrubAxis = 'x';      // 'x' 水平 / 'y' 垂直（可按场景切换）
+    let sceneRate = 1.0;      // 每场景速率系数（<1 = 更慢）
+    let targetTime = 0;
+    let seeking = false;      // seek 锁，避免频繁 seek 卡顿
+    let hasMouse = false;
+
+    function clamp(v, min, max) {
+      return Math.min(max, Math.max(min, v));
+    }
+
+    // 真正执行 seek：只有没有正在 seeking 时才写入 currentTime
+    function requestSeek() {
+      if (seeking) return;                 // 已在 seek，等 seeked 事件释放后再补
+      if (!isFinite(video.duration)) return;
+      if (Math.abs(video.currentTime - targetTime) < 0.001) return;
+      seeking = true;
+      video.currentTime = targetTime;
+    }
+
+    video.addEventListener('seeked', () => {
+      seeking = false;
+      // 若 targetTime 在 seek 过程中又变化了，继续追赶
+      if (Math.abs(video.currentTime - targetTime) > 0.001) {
+        requestSeek();
+      }
+    });
+
+    // ---------- 正向 scrub 时播放原声（与画面解耦，不影响倒放 seek） ----------
+    // 单独的音频元素与主视频共享同一个 blob；只在向正向移动时 play()，
+    // 倒放/静止时 pause()。因此画面 scrub 逻辑完全不变，倒放不受影响。
+    const fwdAudio = new Audio();
+    fwdAudio.preload = 'auto';
+    fwdAudio.muted = true;   // 全局静音
+    let audioIdleTimer = null;
+    function playForwardAudio() {
+      if (!fwdAudio.src) return;
+      // 漂移过大才纠正，避免频繁 seek 造成卡顿
+      if (isFinite(fwdAudio.duration) &&
+          Math.abs(fwdAudio.currentTime - targetTime) > 0.25) {
+        fwdAudio.currentTime = clamp(targetTime, 0, fwdAudio.duration);
+      }
+      const p = fwdAudio.play();
+      if (p && p.catch) p.catch(() => {});
+      clearTimeout(audioIdleTimer);
+      // 停止正向移动一小段时间后自动静音
+      audioIdleTimer = setTimeout(() => { fwdAudio.pause(); }, 140);
+    }
+    function stopForwardAudio() {
+      clearTimeout(audioIdleTimer);
+      fwdAudio.pause();
+    }
+
+    // ---------- 睡觉页视频 scrub（垂直：上=正放，下=倒放） ----------
+    const sv = document.getElementById('sleep-video');
+    const fly = document.getElementById('fly');
+    let sTarget = 0, sSeeking = false, sPrevY = null;
+    function sRequestSeek() {
+      if (sSeeking) return;
+      if (!isFinite(sv.duration)) return;
+      if (Math.abs(sv.currentTime - sTarget) < 0.001) return;
+      sSeeking = true;
+      sv.currentTime = sTarget;
+    }
+    sv.addEventListener('seeked', () => {
+      sSeeking = false;
+      if (Math.abs(sv.currentTime - sTarget) > 0.001) sRequestSeek();
+    });
+
+    // 睡觉页正向（向上）scrub 时播放原声，与画面解耦
+    const sleepAudio = new Audio();
+    sleepAudio.preload = 'auto';
+    sleepAudio.muted = true;   // 全局静音
+    let sAudioIdleTimer = null;
+    function playSleepAudio() {
+      if (!sleepAudio.src) return;
+      if (isFinite(sleepAudio.duration) &&
+          Math.abs(sleepAudio.currentTime - sTarget) > 0.25) {
+        sleepAudio.currentTime = clamp(sTarget, 0, sleepAudio.duration);
+      }
+      const p = sleepAudio.play();
+      if (p && p.catch) p.catch(() => {});
+      clearTimeout(sAudioIdleTimer);
+      sAudioIdleTimer = setTimeout(() => { sleepAudio.pause(); }, 140);
+    }
+    function stopSleepAudio() {
+      clearTimeout(sAudioIdleTimer);
+      sleepAudio.pause();
+    }
+
+    // ---------- 鼠标 scrub ----------
+    window.addEventListener('mousemove', (event) => {
+      // 黑屏睡觉页：蜡烛光晕跟随鼠标
+      const glow = document.getElementById('glow');
+      if (glow) {
+        glow.style.transform = 'translate(' + event.clientX + 'px,' + event.clientY + 'px)';
+      }
+      // 睡觉页 scrub：垂直控制睡觉视频进度，苍蝇指针跟随
+      if (window.sleepScrub) {
+        fly.style.transform =
+          'translate(' + event.clientX + 'px,' + event.clientY + 'px)';
+        const dur = sv.duration || 0;
+        if (sPrevY === null) { sPrevY = event.clientY; return; }
+        const delta = sPrevY - event.clientY;   // 向上为正
+        sPrevY = event.clientY;
+        const inc = (delta / window.innerHeight) * SENSITIVITY * dur;
+        sTarget = clamp(sTarget + inc, 0, dur);
+        sRequestSeek();
+        // 向上（正放）放出原声，向下/静止静音
+        if (inc > 0.0001) playSleepAudio();
+        else if (inc < -0.0001) stopSleepAudio();
+        return;
+      }
+      if (window.sceneBlank) return;   // 其它空白页不做 scrub
+      hasMouse = true;
+      stopAutoPlay();
+      hint.classList.add('hide');
+
+      // 骨头指针跟随鼠标
+      bone.style.transform =
+        'translate(' + event.clientX + 'px,' + event.clientY + 'px)';
+
+      const duration = video.duration || 0;
+
+      let inc;
+      if (scrubAxis === 'y') {
+        // 垂直 scrub：向上 -> 正放；向下 -> 倒放
+        if (prevY === null) { prevY = event.clientY; return; }
+        const delta = prevY - event.clientY;   // 向上为正
+        prevY = event.clientY;
+        inc = (delta / window.innerHeight) * SENSITIVITY * duration;
+      } else {
+        // 水平 scrub：向右 -> 正放；向左 -> 倒放
+        if (prevX === null) { prevX = event.clientX; return; }
+        const delta = event.clientX - prevX;
+        prevX = event.clientX;
+        inc = (delta / window.innerWidth) * SENSITIVITY * duration;
+      }
+
+      // 双向 seek：正向/反向都用 currentTime 逐帧 scrub（原始稳定体验）
+      targetTime = clamp(targetTime + inc * sceneRate, 0, duration);
+      requestSeek();
+      // 只有正向移动才放出原声，倒放/静止静音
+      if (inc > 0.0001) playForwardAudio();
+      else if (inc < -0.0001) stopForwardAudio();
+    });
+
+    // ---------- 移动端 / 无鼠标：缓慢自动循环 ----------
+    let autoPlaying = false;
+    function startAutoPlay() {
+      if (autoPlaying || hasMouse) return;
+      autoPlaying = true;
+      video.loop = true;
+      video.playbackRate = 0.6;   // 缓慢播放
+      const p = video.play();
+      if (p && p.catch) p.catch(() => {/* 停在第一帧亦可 */});
+    }
+    function stopAutoPlay() {
+      if (!autoPlaying) return;
+      autoPlaying = false;
+      video.loop = false;
+      video.pause();
+    }
+
+    // 触摸设备启用自动循环；否则先停在第一帧等待鼠标
+    const isTouch = window.matchMedia('(pointer: coarse)').matches ||
+                    ('ontouchstart' in window);
+
+    function init() {
+      // 停在第一帧
+      try { video.currentTime = 0; } catch (e) {}
+      if (isTouch) {
+        startAutoPlay();
+      }
+    }
+
+    if (video.readyState >= 1) {
+      init();
+    } else {
+      video.addEventListener('loadedmetadata', init, { once: true });
+    }
+
+    // 把视频整个下载为 blob，seek 完全本地进行（不依赖服务器 Range 支持）
+    let currentObjectURL = null;
+    function loadVideo(src) {
+      // 切换视频时重置 scrub 状态
+      targetTime = 0;
+      prevX = null;
+      prevY = null;
+      seeking = false;
+      hasMouse = false;
+      stopAutoPlay();
+      stopForwardAudio();
+      fetch(src + '?v=' + Date.now())
+        .then(r => r.blob())
+        .then(blob => {
+          if (currentObjectURL) URL.revokeObjectURL(currentObjectURL);
+          currentObjectURL = URL.createObjectURL(blob);
+          video.src = currentObjectURL;
+          video.load();
+          // 音频与画面共享同一个 blob，从头开始
+          fwdAudio.src = currentObjectURL;
+          fwdAudio.load();
+        })
+        .catch(() => { video.src = src; });  // 兜底
+    }
+
+    // 通过菜单切换场景：视频 + 指针 + 提示文字
+    function switchScene(item) {
+      window.currentMusic = item.music || 'feeding';
+      if (window.bgm) window.bgm.play(window.currentMusic);   // 切换场景 BGM
+      const comingSoon = document.getElementById('coming-soon');
+      if (item.comingSoon) {
+        window.sceneBlank = true;
+        comingSoon.classList.add('show');
+        document.getElementById('lamp').classList.add('show');
+        document.getElementById('glow').classList.add('show');
+        bone.style.opacity = '0';
+        if (window.resetLamp) window.resetLamp();   // 每次进入都从黑屏开始
+        if (window.ambient) { window.ambient.flyBuzz(false); window.ambient.breathe(true); }  // 黑屏：呼吸声
+        stopAutoPlay();
+        return;
+      }
+      window.sceneBlank = false;
+      if (window.ambient) { window.ambient.breathe(false); window.ambient.flyBuzz(false); }  // 离开睡觉页：停止环境音
+      comingSoon.classList.remove('show');
+      document.getElementById('lamp').classList.remove('show');
+      document.getElementById('glow').classList.remove('show');
+      if (window.resetLamp) window.resetLamp();      // 离开时停止睡觉视频
+      bone.style.opacity = '1';
+      scrubAxis = item.scrub || 'x';   // 切换 scrub 轴向
+      sceneRate = item.rate || 1.0;    // 切换速率（0.8 = 更慢）
+      fwdAudio.playbackRate = sceneRate;
+      loadVideo(item.video);
+      // 切换指针图片与尺寸
+      bone.src = item.cursor;
+      const s = item.cursorSize || 120;
+      bone.style.width = s + 'px';
+      bone.style.height = s + 'px';
+      bone.style.marginLeft = (-s / 2) + 'px';
+      bone.style.marginTop = (-s / 2) + 'px';
+      // 切换提示文字
+      if (item.hint) {
+        hint.textContent = item.hint;
+        hint.classList.remove('hide');
+      }
+    }
+    window.switchScene = switchScene;
+
+    // 灯泡开关：点亮后显示睡觉视频并启用「鼠标上下 scrub」（上=正放，下=倒放），苍蝇指针；再点熄灭回到黑屏
+    (function () {
+      const lamp = document.getElementById('lamp');
+      const cs = document.getElementById('coming-soon');
+      const svEl = document.getElementById('sleep-video');
+      const flyEl = document.getElementById('fly');
+      let active = false;
+      let svURL = null;
+      let offTimer = null;
+
+      function teardownVideo() {
+        try { svEl.pause(); } catch (e) {}
+        stopSleepAudio();
+        sleepAudio.removeAttribute('src');
+        if (svURL) { URL.revokeObjectURL(svURL); svURL = null; }
+        svEl.removeAttribute('src');
+        svEl.load();
+      }
+
+      // 立即重置（切换场景时用，无需过渡）
+      function reset() {
+        active = false;
+        window.sleepScrub = false;
+        if (offTimer) { clearTimeout(offTimer); offTimer = null; }
+        lamp.classList.remove('on');
+        cs.classList.remove('playing');
+        flyEl.classList.remove('show');
+        svEl.onended = null;
+        teardownVideo();
+        sTarget = 0; sPrevY = null; sSeeking = false;
+      }
+      window.resetLamp = reset;
+
+      // 平滑熄灯：先让视频淡出（模拟关灯），过渡结束后再卸载
+      function powerOff() {
+        active = false;
+        window.sleepScrub = false;
+        stopSleepAudio();
+        if (window.ambient) { window.ambient.flyBuzz(false); window.ambient.breathe(true); }  // 关灯回黑屏：呼吸声
+        lamp.classList.remove('on');
+        flyEl.classList.remove('show');
+        cs.classList.remove('playing');   // 触发视频 fade out + 文字 fade in
+        if (offTimer) clearTimeout(offTimer);
+        offTimer = setTimeout(() => {
+          teardownVideo();
+          sTarget = 0; sPrevY = null; sSeeking = false;
+          offTimer = null;
+        }, 1150);   // 与 CSS filter 过渡时长一致
+      }
+
+      lamp.addEventListener('click', () => {
+        if (window.uiSound) window.uiSound.toggle();
+        lamp.classList.remove('pull');
+        void lamp.offsetWidth;   // 重置动画以便可重复触发
+        lamp.classList.add('pull');
+
+        if (!active) {
+          // 点亮：以 blob 加载睡觉视频（可 seek），启用垂直 scrub + 苍蝇指针
+          active = true;
+          if (offTimer) { clearTimeout(offTimer); offTimer = null; }
+          if (window.ambient) { window.ambient.breathe(false); window.ambient.flyBuzz(true); }  // 开灯视频页：苍蝇嗡嗡
+          lamp.classList.add('on');
+          cs.classList.add('playing');
+          sTarget = 0; sPrevY = null; sSeeking = false;
+          svEl.loop = false;
+          fetch('dog5.mp4?v=' + Date.now())
+            .then(r => r.blob())
+            .then(blob => {
+              if (svURL) URL.revokeObjectURL(svURL);
+              svURL = URL.createObjectURL(blob);
+              svEl.src = svURL;
+              svEl.load();
+              sleepAudio.src = svURL;   // 音频与画面共享同一个 blob
+              sleepAudio.load();
+              svEl.addEventListener('loadeddata', () => { try { svEl.currentTime = 0; svEl.pause(); } catch (e) {} }, { once: true });
+            })
+            .catch(() => { svEl.src = 'dog5.mp4'; });
+          window.sleepScrub = true;
+          bone.style.opacity = '0';
+          flyEl.classList.add('show');
+          document.getElementById('glow').classList.remove('show');   // 开灯后收起蜡烛光晕
+        } else {
+          // 熄灭：平滑回到初始黑屏 + Z z Z z 页面
+          powerOff();
+          document.getElementById('glow').classList.add('show');      // 关灯后恢复蜡烛光晕
+        }
+      });
+      lamp.addEventListener('pointerenter', () => { bone.style.opacity = '0'; flyEl.style.opacity = '0'; });
+      lamp.addEventListener('pointerleave', () => { if (!window.sceneBlank) bone.style.opacity = '1'; flyEl.style.opacity = '1'; });
+    })();
+
+    // 初始加载默认场景（对应菜单默认选中项 Sitting）
+    loadVideo('dog.mp4');
+
+    // 触摸时也允许拖动 scrub
+    window.addEventListener('touchstart', () => { stopAutoPlay(); }, { passive: true });
+    window.addEventListener('touchmove', (e) => {
+      hint.classList.add('hide');
+      const t = e.touches[0];
+      if (!t) return;
+      const duration = video.duration || 0;
+      if (scrubAxis === 'y') {
+        if (prevY === null) { prevY = t.clientY; return; }
+        const delta = prevY - t.clientY;
+        prevY = t.clientY;
+        targetTime += (delta / window.innerHeight) * SENSITIVITY * duration;
+      } else {
+        if (prevX === null) { prevX = t.clientX; return; }
+        const delta = t.clientX - prevX;
+        prevX = t.clientX;
+        targetTime += (delta / window.innerWidth) * SENSITIVITY * duration;
+      }
+      targetTime = clamp(targetTime, 0, duration);
+      requestSeek();
+    }, { passive: true });
+    window.addEventListener('touchend', () => {
+      prevX = null;
+      prevY = null;
+      // 松手后若无鼠标交互，恢复缓慢循环
+      if (isTouch) startAutoPlay();
+    });
+  </script>
+</body>
+</html>

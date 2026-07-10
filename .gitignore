@@ -1,0 +1,10 @@
+# 系统文件
+.DS_Store
+
+# 未使用的视频 / 备份 / 旧实验
+dog2.mp4
+dog3_watermark_backup.mp4
+dog5_boom.mp4
+dog5_rev.mp4
+image 23.png
+run.html

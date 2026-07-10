@@ -4,6 +4,7 @@
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
 <title>跟随鼠标的小狗</title>
+<link rel="preload" href="dog.mp4" as="video" type="video/mp4" />
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
   html, body {
@@ -851,38 +852,25 @@
       video.addEventListener('loadedmetadata', init, { once: true });
     }
 
-    // 把视频整个下载为 blob，seek 完全本地进行（不依赖服务器 Range 支持）
-    let currentObjectURL = null;
-
-    // ---- 视频 blob 缓存 + 后台预取 ----
-    // 每个视频只下载一次，切换已访问过的场景即时可用；空闲时静默预取其余视频
-    const blobCache = new Map();        // src -> objectURL（已就绪）
-    const blobPending = new Map();      // src -> Promise（下载中，避免重复）
-    function fetchBlobURL(src) {
-      if (blobCache.has(src)) return Promise.resolve(blobCache.get(src));
-      if (blobPending.has(src)) return blobPending.get(src);
-      const p = fetch(src)              // 稳定 URL，走浏览器缓存
-        .then(r => r.blob())
-        .then(blob => {
-          const url = URL.createObjectURL(blob);
-          blobCache.set(src, url);
-          blobPending.delete(src);
-          return url;
-        })
-        .catch(err => { blobPending.delete(src); throw err; });
-      blobPending.set(src, p);
-      return p;
-    }
-    // 后台按顺序预取，不阻塞当前场景
+    // ---- 原生流式加载 + 后台预热 ----
+    // 不再整段下 blob 才显示；直接把 URL 交给 <video>，浏览器边下边放，
+    // 第一帧几百毫秒即出（GitHub Pages 支持 Range 206）。scrub 缓冲很快填满。
+    const prefetched = new Set();
     function prefetchVideos(srcList) {
       let i = 0;
       (function next() {
         if (i >= srcList.length) return;
         const src = srcList[i++];
-        fetchBlobURL(src).catch(() => {}).finally(() => {
-          // 用 requestIdleCallback 在空闲时继续，避免抢占交互
-          (window.requestIdleCallback || window.setTimeout)(next, 300);
-        });
+        if (!prefetched.has(src)) {
+          prefetched.add(src);
+          // 用隐藏 video 预热浏览器缓存（与真正播放走同一条 Range 缓存路径）
+          const warm = document.createElement('video');
+          warm.preload = 'auto';
+          warm.muted = true;
+          warm.src = src;
+          warm.load();
+        }
+        (window.requestIdleCallback || window.setTimeout)(next, 400);
       })();
     }
 
@@ -897,17 +885,11 @@
       stopForwardAudio();
       const token = src;   // 防止快速连续切换时旧请求覆盖新场景
       loadVideo._token = token;
-      fetchBlobURL(src)
-        .then(url => {
-          if (loadVideo._token !== token) return;   // 已切到别的场景，丢弃
-          currentObjectURL = url;
-          video.src = url;
-          video.load();
-          // 音频与画面共享同一个 blob
-          fwdAudio.src = url;
-          fwdAudio.load();
-        })
-        .catch(() => { if (loadVideo._token === token) video.src = src; });  // 兜底直连
+      // 直接流式加载：立即出第一帧，无需等整段下载
+      video.src = src;
+      video.load();
+      fwdAudio.src = src;
+      fwdAudio.load();
     }
 
     // 通过菜单切换场景：视频 + 指针 + 提示文字
@@ -965,14 +947,12 @@
       const svEl = document.getElementById('sleep-video');
       const flyEl = document.getElementById('fly');
       let active = false;
-      let svURL = null;
       let offTimer = null;
 
       function teardownVideo() {
         try { svEl.pause(); } catch (e) {}
         stopSleepAudio();
         sleepAudio.removeAttribute('src');
-        svURL = null;   // URL 由 blob 缓存持有，不在此 revoke（可复用）
         svEl.removeAttribute('src');
         svEl.load();
       }
@@ -1023,16 +1003,11 @@
           cs.classList.add('playing');
           sTarget = 0; sPrevY = null; sSeeking = false;
           svEl.loop = false;
-          fetchBlobURL('dog5.mp4')
-            .then(url => {
-              svURL = url;
-              svEl.src = url;
-              svEl.load();
-              sleepAudio.src = url;   // 音频与画面共享同一个 blob
-              sleepAudio.load();
-              svEl.addEventListener('loadeddata', () => { try { svEl.currentTime = 0; svEl.pause(); } catch (e) {} }, { once: true });
-            })
-            .catch(() => { svEl.src = 'dog5.mp4'; });
+          svEl.src = 'dog5.mp4';
+          svEl.load();
+          sleepAudio.src = 'dog5.mp4';
+          sleepAudio.load();
+          svEl.addEventListener('loadeddata', () => { try { svEl.currentTime = 0; svEl.pause(); } catch (e) {} }, { once: true });
           window.sleepScrub = true;
           bone.style.opacity = '0';
           flyEl.classList.add('show');
